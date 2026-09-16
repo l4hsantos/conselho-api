@@ -3,7 +3,6 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const pool = require('../config/db');
 
-// Descobre em qual tabela procurar, de acordo com o perfil escolhido
 const TABELAS_POR_PERFIL = {
   aluno: { tabela: 'alunos', colunaLogin: 'matricula' },
   professor: { tabela: 'professores', colunaLogin: 'email' },
@@ -12,8 +11,8 @@ const TABELAS_POR_PERFIL = {
 
 // POST /api/auth/login
 // Corpo esperado: { perfil, identificador, senha }
-// - perfil: "aluno" | "professor" | "coordenador"
-// - identificador: matrícula (aluno) ou email (professor/coordenador)
+// perfil: "aluno" | "professor" | "coordenador"
+// identificador: matrícula (aluno) ou email (professor/coordenador)
 async function login(req, res) {
   const { perfil, identificador, senha } = req.body;
 

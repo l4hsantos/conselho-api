@@ -1,14 +1,14 @@
 const bcrypt = require('bcryptjs');
 const pool = require('../config/db');
 
-// POST /api/alunos/pre-cadastro  (protegido — só coordenador)
+// POST /api/alunos/pre-cadastro  (só coordenador)
 // O coordenador cria o registro do aluno ANTES dele existir no app.
 // O aluno ainda não tem senha — ele define isso na "ativação".
 async function preCadastrar(req, res) {
-  const { matricula, nomeCompleto, dataNascimento, telefone, endereco, nomeResponsavel } = req.body;
+  const { matricula, nomeCompleto, dataNascimento, turmaId, telefone, endereco, nomeResponsavel } = req.body;
 
-  if (!matricula || !nomeCompleto || !dataNascimento) {
-    return res.status(400).json({ erro: 'Matrícula, nome completo e data de nascimento são obrigatórios.' });
+  if (!matricula || !nomeCompleto || !dataNascimento || !turmaId) {
+    return res.status(400).json({ erro: 'Matrícula, nome completo, data de nascimento e turma são obrigatórios.' });
   }
 
   try {
@@ -21,16 +21,17 @@ async function preCadastrar(req, res) {
 
     const [resultado] = await pool.query(
       `INSERT INTO alunos
-        (matricula, nome_completo, data_nascimento, telefone, endereco, nome_responsavel, cadastrado_por)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        (matricula, nome_completo, data_nascimento, turma_id, telefone, endereco, nome_responsavel, cadastrado_por)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         matricula,
         nomeEmMaiuscula,
-        dataNascimento, // esperado: "AAAA-MM-DD"
+        dataNascimento, // formato esperado: "AAAA-MM-DD"
+        turmaId,
         telefone || null,
         endereco || null,
         nomeResponsavel || null,
-        req.usuario.id, // vem do token do coordenador logado
+        req.usuario.id, // vem do token do coordenador
       ]
     );
 
@@ -70,7 +71,6 @@ async function ativar(req, res) {
       return res.status(409).json({ erro: 'Este cadastro já foi ativado. Faça login normalmente.' });
     }
 
-    // Compara a data enviada (AAAA-MM-DD) com a que está no banco
     const dataBanco = new Date(aluno.data_nascimento).toISOString().slice(0, 10);
     if (dataBanco !== dataNascimento) {
       return res.status(401).json({ erro: 'Data de nascimento não confere com o cadastro.' });
@@ -90,13 +90,15 @@ async function ativar(req, res) {
   }
 }
 
-// GET /api/alunos  (protegido — só coordenador)
+// GET /api/alunos  (só coordenador)
 async function listar(req, res) {
   try {
     const [linhas] = await pool.query(
-      `SELECT id, matricula, nome_completo, data_nascimento, ativado,
-              telefone, endereco, nome_responsavel, criado_em
-       FROM alunos`
+      `SELECT a.id, a.matricula, a.nome_completo, a.data_nascimento, a.ativado,
+              a.telefone, a.endereco, a.nome_responsavel, a.criado_em,
+              a.turma_id, t.ano AS turma_ano, t.letra AS turma_letra
+       FROM alunos a
+       LEFT JOIN turmas t ON t.id = a.turma_id`
     );
     return res.json(linhas);
   } catch (erro) {
@@ -105,13 +107,16 @@ async function listar(req, res) {
   }
 }
 
-// GET /api/alunos/:id  (protegido — coordenador ou o próprio aluno)
+// GET /api/alunos/:id  (coordenador ou o próprio aluno)
 async function buscarPorId(req, res) {
   try {
     const [linhas] = await pool.query(
-      `SELECT id, matricula, nome_completo, data_nascimento, ativado,
-              telefone, endereco, nome_responsavel, criado_em
-       FROM alunos WHERE id = ?`,
+      `SELECT a.id, a.matricula, a.nome_completo, a.data_nascimento, a.ativado,
+              a.telefone, a.endereco, a.nome_responsavel, a.criado_em,
+              a.turma_id, t.ano AS turma_ano, t.letra AS turma_letra
+       FROM alunos a
+       LEFT JOIN turmas t ON t.id = a.turma_id
+       WHERE a.id = ?`,
       [req.params.id]
     );
     if (linhas.length === 0) {
@@ -124,15 +129,16 @@ async function buscarPorId(req, res) {
   }
 }
 
-// PUT /api/alunos/:id  (protegido — só coordenador)
+// PUT /api/alunos/:id  (só coordenador)
 async function atualizar(req, res) {
-  const { nomeCompleto, dataNascimento, telefone, endereco, nomeResponsavel } = req.body;
+  const { nomeCompleto, dataNascimento, turmaId, telefone, endereco, nomeResponsavel } = req.body;
 
   try {
     const [resultado] = await pool.query(
       `UPDATE alunos SET
         nome_completo = COALESCE(?, nome_completo),
         data_nascimento = COALESCE(?, data_nascimento),
+        turma_id = COALESCE(?, turma_id),
         telefone = COALESCE(?, telefone),
         endereco = COALESCE(?, endereco),
         nome_responsavel = COALESCE(?, nome_responsavel)
@@ -140,6 +146,7 @@ async function atualizar(req, res) {
       [
         nomeCompleto ? nomeCompleto.toUpperCase() : null,
         dataNascimento || null,
+        turmaId || null,
         telefone || null,
         endereco || null,
         nomeResponsavel || null,
@@ -157,7 +164,7 @@ async function atualizar(req, res) {
   }
 }
 
-// DELETE /api/alunos/:id  (protegido — só coordenador)
+// DELETE /api/alunos/:id  (só coordenador)
 async function remover(req, res) {
   try {
     const [resultado] = await pool.query('DELETE FROM alunos WHERE id = ?', [req.params.id]);

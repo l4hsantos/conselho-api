@@ -1,13 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const {
-  preCadastrar,
-  ativar,
-  listar,
-  buscarPorId,
-  atualizar,
-  remover,
-} = require('../controllers/alunoController');
+const {preCadastrar,ativar,listar,buscarPorId,atualizar,remover,} = require('../controllers/alunoController');
 const { autenticar, somenteCoordenador } = require('../middlewares/auth');
 
 // POST /api/alunos/pre-cadastro  → protegido, só coordenador logado

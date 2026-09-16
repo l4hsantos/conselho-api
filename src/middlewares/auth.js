@@ -1,6 +1,4 @@
-// Middleware que confere se a requisição trouxe um token válido.
-// Uso: colocar como segundo argumento da rota, ex:
-//   router.get('/rota-protegida', autenticar, minhaFuncao)
+//colocar como segundo argumento da rota, ex: router.get('/rota-protegida', autenticar, minhaFuncao)
 
 require('dotenv').config();
 const jwt = require('jsonwebtoken');

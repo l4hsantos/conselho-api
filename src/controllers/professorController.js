@@ -49,7 +49,7 @@ async function cadastrar(req, res) {
   }
 }
 
-// GET /api/professores  (protegido — só coordenador)
+// GET /api/professores  (só coordenador)
 async function listar(req, res) {
   try {
     const [linhas] = await pool.query(
@@ -62,7 +62,7 @@ async function listar(req, res) {
   }
 }
 
-// DELETE /api/professores/:id  (protegido — só coordenador)
+// DELETE /api/professores/:id  (só coordenador)
 async function remover(req, res) {
   try {
     const [resultado] = await pool.query('DELETE FROM professores WHERE id = ?', [req.params.id]);
