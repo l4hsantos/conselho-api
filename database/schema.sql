@@ -1,5 +1,5 @@
 -- ============================================
--- (para rodar no terminal: 
+-- (para rodar no terminal:
 -- mysql -u root -p < schema.sql)
 
 CREATE DATABASE IF NOT EXISTS conselho_mais
