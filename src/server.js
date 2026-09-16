@@ -7,11 +7,13 @@ const coordenadorRoutes = require('./routes/coordenadorRoutes');
 const professorRoutes = require('./routes/professorRoutes');
 const alunoRoutes = require('./routes/alunoRoutes');
 const turmaRoutes = require('./routes/turmaRoutes');
+const vinculoRoutes = require('./routes/vinculoRoutes');
 
 const app = express();
 
 app.use(cors()); // permite que o app (rodando em outro endereço) fale com a API
 app.use(express.json()); // permite receber JSON no corpo das requisições
+app.use('/api/vinculos', vinculoRoutes);
 
 app.get('/', (req, res) => {
   res.json({ mensagem: 'API do CONSELHO+ está rodando' });
