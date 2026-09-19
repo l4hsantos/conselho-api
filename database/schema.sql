@@ -1,5 +1,5 @@
 -- ============================================
--- (para rodar no terminal:
+-- (para rodar no terminal: 
 -- mysql -u root -p < schema.sql)
 
 CREATE DATABASE IF NOT EXISTS conselho_mais
@@ -70,3 +70,50 @@ INSERT IGNORE INTO turmas (ano, letra) VALUES
   (1, 'A'), (1, 'B'),
   (2, 'A'), (2, 'B'),
   (3, 'A'), (3, 'B');
+  
+  USE conselho_mais;
+
+ALTER TABLE alunos
+  ADD COLUMN turma_id INT NULL AFTER data_nascimento,
+  ADD CONSTRAINT fk_alunos_turma FOREIGN KEY (turma_id) REFERENCES turmas(id);
+  
+  USE conselho_mais;
+
+CREATE TABLE IF NOT EXISTS disciplinas (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  nome VARCHAR(100) NOT NULL UNIQUE
+);
+
+INSERT IGNORE INTO disciplinas (nome) VALUES
+  ('Matemática'),
+  ('Língua Portuguesa'),
+  ('Biologia'),
+  ('Química'),
+  ('Física'),
+  ('História'),
+  ('Geografia'),
+  ('Inglês Instrumental'),
+  ('Educação Física'),
+  ('Artes'),
+  ('Programação');
+
+CREATE TABLE IF NOT EXISTS vinculos (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  professor_id INT NOT NULL,
+  turma_id INT NOT NULL,
+  disciplina_id INT NOT NULL,
+  criado_em DATETIME DEFAULT CURRENT_TIMESTAMP,
+
+  FOREIGN KEY (professor_id) REFERENCES professores(id) ON DELETE CASCADE,
+  FOREIGN KEY (turma_id) REFERENCES turmas(id) ON DELETE CASCADE,
+  FOREIGN KEY (disciplina_id) REFERENCES disciplinas(id) ON DELETE CASCADE,
+
+  UNIQUE KEY vinculo_unico (professor_id, turma_id, disciplina_id)
+);
+  
+  -- TESTES:
+
+SELECT * FROM conselho_mais.coordenadores;
+SELECT * FROM conselho_mais.professores;
+SELECT * FROM turmas;
+SELECT * FROM disciplinas;
