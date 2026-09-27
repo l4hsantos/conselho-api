@@ -131,36 +131,80 @@ async function buscarPorId(req, res) {
 
 // PUT /api/alunos/:id  (só coordenador)
 async function atualizar(req, res) {
-  const { nomeCompleto, dataNascimento, turmaId, telefone, endereco, nomeResponsavel } = req.body;
+  const { id } = req.params;
+
+  const {
+    nomeCompleto,
+    dataNascimento,
+    turmaId,
+    telefone,
+    endereco,
+    nomeResponsavel,
+  } = req.body;
+
+  if (!nomeCompleto || !dataNascimento || !turmaId) {
+    return res.status(400).json({
+      erro: 'Nome, data de nascimento e turma são obrigatórios.',
+    });
+  }
 
   try {
-    const [resultado] = await pool.query(
-      `UPDATE alunos SET
-        nome_completo = COALESCE(?, nome_completo),
-        data_nascimento = COALESCE(?, data_nascimento),
-        turma_id = COALESCE(?, turma_id),
-        telefone = COALESCE(?, telefone),
-        endereco = COALESCE(?, endereco),
-        nome_responsavel = COALESCE(?, nome_responsavel)
-       WHERE id = ?`,
+    // Verifica se o aluno existe
+    const [alunos] = await pool.query(
+      'SELECT id FROM alunos WHERE id = ?',
+      [id]
+    );
+
+    if (alunos.length === 0) {
+      return res.status(404).json({
+        erro: 'Aluno não encontrado.',
+      });
+    }
+
+    // Verifica se a turma existe
+    const [turmas] = await pool.query(
+      'SELECT id FROM turmas WHERE id = ?',
+      [turmaId]
+    );
+
+    if (turmas.length === 0) {
+      return res.status(400).json({
+        erro: 'Turma não encontrada.',
+      });
+    }
+
+    await pool.query(
+      `
+      UPDATE alunos
+      SET
+        nome_completo = ?,
+        data_nascimento = ?,
+        turma_id = ?,
+        telefone = ?,
+        endereco = ?,
+        nome_responsavel = ?
+      WHERE id = ?
+      `,
       [
-        nomeCompleto ? nomeCompleto.toUpperCase() : null,
-        dataNascimento || null,
-        turmaId || null,
+        nomeCompleto.trim().toUpperCase(),
+        dataNascimento,
+        turmaId,
         telefone || null,
         endereco || null,
         nomeResponsavel || null,
-        req.params.id,
+        id,
       ]
     );
 
-    if (resultado.affectedRows === 0) {
-      return res.status(404).json({ erro: 'Aluno não encontrado.' });
-    }
-    return res.json({ mensagem: 'Aluno atualizado com sucesso.' });
+    return res.json({
+      mensagem: 'Aluno atualizado com sucesso.',
+    });
   } catch (erro) {
     console.error(erro);
-    return res.status(500).json({ erro: 'Erro interno ao atualizar aluno.' });
+
+    return res.status(500).json({
+      erro: 'Erro interno ao atualizar aluno.',
+    });
   }
 }
 
