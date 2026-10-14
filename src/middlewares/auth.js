@@ -28,5 +28,15 @@ function somenteCoordenador(req, res, next) {
   }
   next();
 }
+// Middleware extra: só deixa passar se o perfil logado for "professor"
+function somenteProfessor(req, res, next) {
+  if (req.usuario?.perfil !== 'professor') {
+    return res.status(403).json({
+      erro: 'Apenas professores podem fazer isso.',
+    });
+  }
 
-module.exports = { autenticar, somenteCoordenador };
+  next();
+}
+
+module.exports = { autenticar, somenteCoordenador, somenteProfessor };

@@ -222,4 +222,58 @@ async function remover(req, res) {
   }
 }
 
-module.exports = { preCadastrar, ativar, listar, buscarPorId, atualizar, remover };
+// GET /api/alunos/turma/:turmaId
+// Lista os alunos de uma turma.
+
+async function listarPorTurma(req, res) {
+  const turmaId = Number(req.params.turmaId);
+  const professorId = req.usuario.id;
+
+  if (!Number.isInteger(turmaId) || turmaId <= 0) {
+    return res.status(400).json({
+      erro: 'ID da turma inválido.',
+    });
+  }
+
+  try {
+    const [vinculos] = await pool.query(
+      `SELECT id
+       FROM vinculos
+       WHERE professor_id = ? AND turma_id = ?
+       LIMIT 1`,
+      [professorId, turmaId]
+    );
+
+    if (vinculos.length === 0) {
+      return res.status(403).json({
+        erro: 'Você não tem acesso a esta turma.',
+      });
+    }
+
+    const [alunos] = await pool.query(
+      `SELECT
+        a.id,
+        a.matricula,
+        a.nome_completo,
+        a.turma_id,
+        t.ano AS turma_ano,
+        t.letra AS turma_letra
+       FROM alunos a
+       INNER JOIN turmas t ON t.id = a.turma_id
+       WHERE a.turma_id = ?
+       ORDER BY a.nome_completo`,
+      [turmaId]
+    );
+
+    return res.json(alunos);
+  } catch (erro) {
+    console.error(erro);
+
+    return res.status(500).json({
+      erro: 'Erro interno ao listar alunos da turma.',
+    });
+  }
+}
+
+
+module.exports = { preCadastrar, ativar, listar, listarPorTurma, buscarPorId, atualizar, remover };

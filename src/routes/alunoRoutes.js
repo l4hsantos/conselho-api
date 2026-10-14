@@ -1,24 +1,42 @@
-const express = require('express');
+const express = require("express");
 const router = express.Router();
-const {preCadastrar,ativar,listar,buscarPorId,atualizar,remover,} = require('../controllers/alunoController');
-const { autenticar, somenteCoordenador } = require('../middlewares/auth');
 
-// POST /api/alunos/pre-cadastro  → protegido, só coordenador logado
-router.post('/pre-cadastro', autenticar, somenteCoordenador, preCadastrar);
+const {
+  preCadastrar,
+  ativar,
+  listar,
+  listarPorTurma,
+  buscarPorId,
+  atualizar,
+  remover,
+} = require("../controllers/alunoController");
 
-// POST /api/alunos/ativar  → aberto (o aluno ainda não tem login pra logar)
-router.post('/ativar', ativar);
+const {
+  autenticar,
+  somenteCoordenador,
+  somenteProfessor,
+} = require("../middlewares/auth");
 
-// GET /api/alunos  → protegido, só coordenador logado
-router.get('/', autenticar, somenteCoordenador, listar);
+// POST /api/alunos/pre-cadastro
+router.post("/pre-cadastro", autenticar, somenteCoordenador, preCadastrar);
 
-// GET /api/alunos/:id  → protegido (qualquer perfil logado, ex: o próprio aluno)
-router.get('/:id', autenticar, buscarPorId);
+// POST /api/alunos/ativar
+router.post("/ativar", ativar);
 
-// PUT /api/alunos/:id  → protegido, só coordenador logado
-router.put('/:id', autenticar, somenteCoordenador, atualizar);
+// GET /api/alunos
+router.get("/", autenticar, somenteCoordenador, listar);
 
-// DELETE /api/alunos/:id  → protegido, só coordenador logado
-router.delete('/:id', autenticar, somenteCoordenador, remover);
+// GET /api/alunos/turma/:turmaId
+// super importante!!
+router.get("/turma/:turmaId", autenticar, somenteProfessor, listarPorTurma);
+
+// GET /api/alunos/:id
+router.get("/:id", autenticar, buscarPorId);
+
+// PUT /api/alunos/:id
+router.put("/:id", autenticar, somenteCoordenador, atualizar);
+
+// DELETE /api/alunos/:id
+router.delete("/:id", autenticar, somenteCoordenador, remover);
 
 module.exports = router;

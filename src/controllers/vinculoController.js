@@ -168,5 +168,33 @@ async function remover(req, res) {
   }
 }
 
-module.exports = {listar,listarDisciplinas,cadastrar,remover,
+// GET /api/vinculos/turmas/professor
+// Lista somente as turmas vinculadas ao professor logado.
+async function listarTurmasDoProfessor(req, res) {
+  try {
+    const professorId = req.usuario.id;
+
+    const [linhas] = await pool.query(`
+      SELECT DISTINCT
+        t.id,
+        t.ano,
+        t.letra
+      FROM vinculos v
+      INNER JOIN turmas t ON t.id = v.turma_id
+      WHERE v.professor_id = ?
+      ORDER BY t.ano, t.letra
+    `, [professorId]);
+
+    return res.json(linhas);
+  } catch (erro) {
+    console.error(erro);
+
+    return res.status(500).json({
+      erro: 'Erro interno ao listar turmas do professor.',
+    });
+  }
+}
+
+
+module.exports = {listar,listarDisciplinas,cadastrar,remover,listarTurmasDoProfessor
 };
