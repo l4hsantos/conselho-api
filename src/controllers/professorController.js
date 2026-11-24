@@ -127,6 +127,7 @@ async function listarVinculosProfessor(req, res) {
          v.turma_id,
          t.ano,
          t.letra,
+         v.aulas_por_dia,
          v.disciplina_id,
          d.nome AS disciplina
        FROM vinculos v
@@ -144,83 +145,134 @@ async function listarVinculosProfessor(req, res) {
   }
 }
 
-async function registrarChamada(req, res) {
-  const { turma_id, disciplina_id, data_aula, alunos } = req.body;
+async function atualizarAulasPorDia(req, res) {
+  const { turma_id, disciplina_id, aulas_por_dia } = req.body || {};
+  const turmaId = Number(turma_id);
+  const disciplinaId = Number(disciplina_id);
+  const quantidade = Number(aulas_por_dia);
 
+  if (
+    !Number.isInteger(turmaId) || turmaId <= 0 ||
+    !Number.isInteger(disciplinaId) || disciplinaId <= 0
+  ) {
+    return res.status(400).json({ erro: "Turma ou disciplina inválida." });
+  }
+
+  if (!Number.isInteger(quantidade) || quantidade < 1 || quantidade > 6) {
+    return res.status(400).json({
+      erro: "A quantidade de aulas deve ser um número inteiro entre 1 e 6.",
+    });
+  }
+
+  try {
+    const [resultado] = await pool.execute(
+      `UPDATE vinculos
+       SET aulas_por_dia = ?
+       WHERE professor_id = ? AND turma_id = ? AND disciplina_id = ?`,
+      [quantidade, req.usuario.id, turmaId, disciplinaId]
+    );
+
+    if (resultado.affectedRows === 0) {
+      return res.status(404).json({ erro: "Vínculo não encontrado." });
+    }
+
+    return res.json({
+      mensagem: "Quantidade de aulas atualizada.",
+      aulas_por_dia: quantidade,
+    });
+  } catch (erro) {
+    console.error(erro);
+    return res.status(500).json({
+      erro: "Não foi possível atualizar a quantidade de aulas.",
+    });
+  }
+}
+
+async function registrarChamada(req, res) {
+  const { turma_id, disciplina_id, data_aula, alunos } = req.body || {};
   const turmaId = Number(turma_id);
   const disciplinaId = Number(disciplina_id);
 
   if (
-    !Number.isInteger(turmaId) ||
-    turmaId <= 0 ||
-    !Number.isInteger(disciplinaId) ||
-    disciplinaId <= 0
+    !Number.isInteger(turmaId) || turmaId <= 0 ||
+    !Number.isInteger(disciplinaId) || disciplinaId <= 0
   ) {
-    return res.status(400).json({ erro: 'Turma ou disciplina inválida.' });
+    return res.status(400).json({ erro: "Turma ou disciplina inválida." });
   }
 
-  const dataValida =
-    typeof data_aula === 'string' &&
-    /^\d{4}-\d{2}-\d{2}$/.test(data_aula) &&
-    !Number.isNaN(Date.parse(`${data_aula}T00:00:00Z`)) &&
-    new Date(`${data_aula}T00:00:00Z`).toISOString().slice(0, 10) === data_aula;
-
-  if (!dataValida) {
-    return res.status(400).json({ erro: 'Informe a data no formato AAAA-MM-DD.' });
+  if (!dataISOValida(data_aula)) {
+    return res.status(400).json({
+      erro: "Informe a data no formato AAAA-MM-DD.",
+    });
   }
 
   if (!Array.isArray(alunos) || alunos.length === 0) {
-    return res.status(400).json({ erro: 'A lista de alunos está vazia ou inválida.' });
+    return res.status(400).json({ erro: "A lista de alunos está vazia ou inválida." });
   }
 
-  const registros = [];
   const idsRecebidos = new Set();
+  const registros = [];
 
   for (const aluno of alunos) {
     const alunoId = Number(aluno?.aluno_id);
-    const presente = aluno?.presente;
+    const faltas = Number(aluno?.faltas);
 
     if (
-      !Number.isInteger(alunoId) ||
-      alunoId <= 0 ||
+      !Number.isInteger(alunoId) || alunoId <= 0 ||
       idsRecebidos.has(alunoId) ||
-      ![true, false, 0, 1].includes(presente)
+      !Number.isInteger(faltas) || faltas < 0 || faltas > 6
     ) {
-      return res.status(400).json({ erro: 'Há dados inválidos na lista de alunos.' });
+      return res.status(400).json({
+        erro: "Confira os alunos e as faltas informadas.",
+      });
     }
 
     idsRecebidos.add(alunoId);
-    registros.push([alunoId, presente === true || presente === 1 ? 1 : 0]);
+    registros.push({ alunoId, faltas });
   }
 
   let conexao;
+  let transacaoIniciada = false;
 
   try {
     conexao = await pool.getConnection();
     await conexao.beginTransaction();
+    transacaoIniciada = true;
 
-    // Confere se o professor autenticado tem este vínculo.
     const [vinculos] = await conexao.execute(
-      `SELECT id
+      `SELECT id, aulas_por_dia
        FROM vinculos
-       WHERE professor_id = ? AND turma_id = ? AND disciplina_id = ?`,
+       WHERE professor_id = ? AND turma_id = ? AND disciplina_id = ?
+       FOR UPDATE`,
       [req.usuario.id, turmaId, disciplinaId]
     );
 
     if (vinculos.length === 0) {
       await conexao.rollback();
+      transacaoIniciada = false;
       return res.status(403).json({
-        erro: 'Você não tem vínculo com esta turma e disciplina.',
+        erro: "Você não tem vínculo com esta turma e disciplina.",
       });
     }
 
-    // Confere se a chamada contém exatamente os alunos atualmente matriculados na turma.
+    const quantidadeAulas = Number(vinculos[0].aulas_por_dia);
+
+    if (registros.some((registro) => registro.faltas > quantidadeAulas)) {
+      await conexao.rollback();
+      transacaoIniciada = false;
+      return res.status(400).json({
+        erro: `As faltas não podem ultrapassar ${quantidadeAulas} aulas.`,
+      });
+    }
+
     const [alunosDaTurma] = await conexao.execute(
-      'SELECT id FROM alunos WHERE turma_id = ? ORDER BY id',
+      "SELECT id FROM alunos WHERE turma_id = ? ORDER BY id",
       [turmaId]
     );
 
-    const idsDaTurma = alunosDaTurma.map((aluno) => aluno.id).sort((a, b) => a - b);
+    const idsDaTurma = alunosDaTurma
+      .map((aluno) => Number(aluno.id))
+      .sort((a, b) => a - b);
     const idsEnviados = [...idsRecebidos].sort((a, b) => a - b);
 
     if (
@@ -228,51 +280,54 @@ async function registrarChamada(req, res) {
       idsDaTurma.some((id, indice) => id !== idsEnviados[indice])
     ) {
       await conexao.rollback();
+      transacaoIniciada = false;
       return res.status(400).json({
-        erro: 'A lista enviada não corresponde aos alunos matriculados nesta turma.',
+        erro: "A lista enviada não corresponde aos alunos matriculados nesta turma.",
       });
     }
 
     const [resultado] = await conexao.execute(
       `INSERT INTO chamadas
-         (professor_id, turma_id, disciplina_id, data_aula)
-       VALUES (?, ?, ?, ?)`,
-      [req.usuario.id, turmaId, disciplinaId, data_aula]
+         (professor_id, turma_id, disciplina_id, data_aula, quantidade_aulas)
+       VALUES (?, ?, ?, ?, ?)`,
+      [req.usuario.id, turmaId, disciplinaId, data_aula, quantidadeAulas]
     );
 
     const chamadaId = resultado.insertId;
-    const placeholders = registros.map(() => '(?, ?, ?)').join(', ');
-    const valores = registros.flatMap(([alunoId, presente]) => [
+    const placeholders = registros.map(() => "(?, ?, ?, ?)").join(", ");
+    const valores = registros.flatMap(({ alunoId, faltas }) => [
       chamadaId,
       alunoId,
-      presente,
+      faltas === 0 ? 1 : 0,
+      faltas,
     ]);
 
     await conexao.execute(
-      `INSERT INTO chamada_alunos (chamada_id, aluno_id, presente)
+      `INSERT INTO chamada_alunos
+         (chamada_id, aluno_id, presente, faltas)
        VALUES ${placeholders}`,
       valores
     );
 
     await conexao.commit();
+    transacaoIniciada = false;
 
     return res.status(201).json({
-      mensagem: 'Chamada registrada com sucesso.',
+      mensagem: "Chamada registrada com sucesso.",
       chamada_id: chamadaId,
+      quantidade_aulas: quantidadeAulas,
     });
   } catch (erro) {
-    if (conexao) {
-      await conexao.rollback();
-    }
+    if (conexao && transacaoIniciada) await conexao.rollback();
 
-    if (erro.code === 'ER_DUP_ENTRY') {
+    if (erro.code === "ER_DUP_ENTRY") {
       return res.status(409).json({
-        erro: 'Já existe uma chamada para esta turma, disciplina e data.',
+        erro: "Já existe uma chamada para esta turma, disciplina e data.",
       });
     }
 
     console.error(erro);
-    return res.status(500).json({ erro: 'Erro interno ao registrar a chamada.' });
+    return res.status(500).json({ erro: "Erro interno ao registrar a chamada." });
   } finally {
     if (conexao) conexao.release();
   }
@@ -289,8 +344,8 @@ async function listarChamadas(req, res) {
          d.nome AS disciplina,
          DATE_FORMAT(c.data_aula, '%Y-%m-%d') AS data_aula,
          COUNT(ca.aluno_id) AS total_alunos,
-         COALESCE(SUM(ca.presente = 1), 0) AS presentes,
-         COALESCE(SUM(ca.presente = 0), 0) AS faltas
+         COALESCE(SUM(ca.faltas = 0), 0) AS presentes,
+         COALESCE(SUM(ca.faltas), 0) AS faltas
        FROM chamadas c
        JOIN turmas t ON t.id = c.turma_id
        JOIN disciplinas d ON d.id = c.disciplina_id
@@ -325,6 +380,8 @@ async function obterChamada(req, res) {
          t.ano,
          t.letra,
          c.disciplina_id,
+         c.quantidade_aulas,
+         COALESCE(ca.faltas, CASE WHEN ca.presente = 0 THEN 1 ELSE 0 END, 0) AS faltas,
          d.nome AS disciplina,
          DATE_FORMAT(c.data_aula, '%Y-%m-%d') AS data_aula,
          a.id AS aluno_id,
@@ -346,6 +403,7 @@ async function obterChamada(req, res) {
     }
 
     const chamada = {
+      quantidade_aulas: Number(linhas[0].quantidade_aulas) || 1,
       chamada_id: linhas[0].chamada_id,
       turma_id: linhas[0].turma_id,
       ano: linhas[0].ano,
@@ -361,7 +419,8 @@ async function obterChamada(req, res) {
         aluno_id: linha.aluno_id,
         nome_completo: linha.nome_completo,
         matricula: linha.matricula,
-        presente: Boolean(linha.presente),
+        presente: Number(linha.faltas) === 0,
+        faltas: Number(linha.faltas) || 0,
       }));
 
     return res.json({ chamada, alunos });
@@ -374,130 +433,135 @@ async function obterChamada(req, res) {
 // PUT /api/professores/chamadas/:id
 async function editarChamada(req, res) {
   const chamadaId = Number(req.params.id);
-  const { data_aula, alunos } = req.body;
+  const { data_aula, alunos } = req.body || {};
 
   if (!Number.isInteger(chamadaId) || chamadaId <= 0) {
-    return res.status(400).json({ erro: 'Número da chamada inválido.' });
+    return res.status(400).json({ erro: "Número da chamada inválido." });
   }
 
-  const dataValida =
-    typeof data_aula === 'string' &&
-    /^\d{4}-\d{2}-\d{2}$/.test(data_aula) &&
-    !Number.isNaN(Date.parse(`${data_aula}T00:00:00Z`)) &&
-    new Date(`${data_aula}T00:00:00Z`).toISOString().slice(0, 10) === data_aula;
-
-  if (!dataValida) {
+  if (!dataISOValida(data_aula)) {
     return res.status(400).json({
-      erro: 'Informe uma data válida no formato AAAA-MM-DD.',
+      erro: "Informe uma data válida no formato AAAA-MM-DD.",
     });
   }
 
   if (!Array.isArray(alunos) || alunos.length === 0) {
-    return res.status(400).json({ erro: 'A lista de alunos é inválida.' });
+    return res.status(400).json({ erro: "A lista de alunos é inválida." });
   }
 
-  const idsRecebidos = [];
-  const idsUnicos = new Set();
+  const idsRecebidos = new Set();
+  const registros = [];
 
   for (const aluno of alunos) {
     const alunoId = Number(aluno?.aluno_id);
+    const faltas = Number(aluno?.faltas);
 
     if (
       !Number.isInteger(alunoId) ||
       alunoId <= 0 ||
-      idsUnicos.has(alunoId) ||
-      ![true, false, 0, 1].includes(aluno?.presente)
+      idsRecebidos.has(alunoId) ||
+      !Number.isInteger(faltas) ||
+      faltas < 0
     ) {
       return res.status(400).json({
-        erro: 'Confira os alunos e as presenças informadas.',
+        erro: "Confira os alunos e as faltas informadas.",
       });
     }
 
-    idsUnicos.add(alunoId);
-    idsRecebidos.push(alunoId);
+    idsRecebidos.add(alunoId);
+    registros.push({ alunoId, faltas });
   }
 
   let conexao;
+  let transacaoIniciada = false;
 
   try {
     conexao = await pool.getConnection();
     await conexao.beginTransaction();
+    transacaoIniciada = true;
 
-    // Garante que a chamada existe e pertence ao professor autenticado.
-    const [chamadasEncontradas] = await conexao.execute(
-      `SELECT id
+    const [chamadas] = await conexao.execute(
+      `SELECT id, quantidade_aulas
        FROM chamadas
        WHERE id = ? AND professor_id = ?
        FOR UPDATE`,
       [chamadaId, req.usuario.id]
     );
 
-    if (chamadasEncontradas.length === 0) {
+    if (chamadas.length === 0) {
       await conexao.rollback();
-      return res.status(404).json({ erro: 'Chamada não encontrada.' });
+      transacaoIniciada = false;
+      return res.status(404).json({ erro: "Chamada não encontrada." });
     }
 
-    // A edição não pode incluir nem remover alunos da chamada original.
+    const maximoFaltas = Number(chamadas[0].quantidade_aulas) || 1;
+
+    if (registros.some((item) => item.faltas > maximoFaltas)) {
+      await conexao.rollback();
+      transacaoIniciada = false;
+      return res.status(400).json({
+        erro: `As faltas não podem ultrapassar ${maximoFaltas} aulas.`,
+      });
+    }
+
     const [alunosOriginais] = await conexao.execute(
-      `SELECT aluno_id
-       FROM chamada_alunos
-       WHERE chamada_id = ?`,
+      `SELECT aluno_id FROM chamada_alunos WHERE chamada_id = ?`,
       [chamadaId]
     );
 
     const idsOriginais = alunosOriginais
-      .map((aluno) => Number(aluno.aluno_id))
+      .map((item) => Number(item.aluno_id))
+      .sort((a, b) => a - b);
+    const idsNovos = registros
+      .map((item) => item.alunoId)
       .sort((a, b) => a - b);
 
-    const idsNovos = [...idsRecebidos].sort((a, b) => a - b);
-
-    const mesmosAlunos =
-      idsOriginais.length === idsNovos.length &&
-      idsOriginais.every((id, indice) => id === idsNovos[indice]);
-
-    if (!mesmosAlunos) {
+    if (
+      idsOriginais.length !== idsNovos.length ||
+      idsOriginais.some((id, indice) => id !== idsNovos[indice])
+    ) {
       await conexao.rollback();
+      transacaoIniciada = false;
       return res.status(400).json({
-        erro: 'A edição deve manter os mesmos alunos da chamada original.',
+        erro: "A edição deve manter os mesmos alunos da chamada original.",
       });
     }
 
     await conexao.execute(
-      'UPDATE chamadas SET data_aula = ? WHERE id = ?',
+      "UPDATE chamadas SET data_aula = ? WHERE id = ?",
       [data_aula, chamadaId]
     );
 
-    for (const aluno of alunos) {
-      const presente = aluno.presente === true || aluno.presente === 1 ? 1 : 0;
-
+    for (const item of registros) {
       await conexao.execute(
         `UPDATE chamada_alunos
-         SET presente = ?
+         SET faltas = ?, presente = ?
          WHERE chamada_id = ? AND aluno_id = ?`,
-        [presente, chamadaId, Number(aluno.aluno_id)]
+        [
+          item.faltas,
+          item.faltas === 0 ? 1 : 0,
+          chamadaId,
+          item.alunoId,
+        ]
       );
     }
 
     await conexao.commit();
-
-    return res.json({ mensagem: 'Chamada atualizada com sucesso.' });
+    transacaoIniciada = false;
+    return res.json({ mensagem: "Chamada atualizada com sucesso." });
   } catch (erro) {
-    if (conexao) {
-      await conexao.rollback();
-    }
+    if (conexao && transacaoIniciada) await conexao.rollback();
 
-    if (erro.code === 'ER_DUP_ENTRY') {
+    if (erro.code === "ER_DUP_ENTRY") {
       return res.status(409).json({
-        erro: 'Já existe uma chamada para esta turma, disciplina e data.',
+        erro: "Já existe uma chamada para esta turma, disciplina e data.",
       });
     }
 
     console.error(erro);
-    return res.status(500).json({ erro: 'Erro interno ao editar a chamada.' });
+    return res.status(500).json({ erro: "Erro interno ao editar a chamada." });
   } finally {
-    if (conexao) {
-      conexao.release();
-    }
+    if (conexao) conexao.release();
   }
 }
 
@@ -533,29 +597,31 @@ async function listarFrequenciaTurma(req, res) {
 
     const [linhas] = await pool.query(
       `SELECT
-         a.id AS aluno_id,
-         a.nome_completo,
-         a.matricula,
-         COUNT(ca.chamada_id) AS total_aulas,
-         COALESCE(SUM(CASE WHEN ca.presente = 1 THEN 1 ELSE 0 END), 0) AS presencas,
-         COALESCE(SUM(CASE WHEN ca.presente = 0 THEN 1 ELSE 0 END), 0) AS faltas
-       FROM alunos a
-       LEFT JOIN chamadas c
-         ON c.turma_id = a.turma_id
-        AND c.disciplina_id = ?
-       LEFT JOIN chamada_alunos ca
-         ON ca.chamada_id = c.id
-        AND ca.aluno_id = a.id
-       WHERE a.turma_id = ?
-       GROUP BY a.id, a.nome_completo, a.matricula
-       ORDER BY a.nome_completo`,
-      [disciplinaId, turmaId]
+  a.id AS aluno_id,
+  a.nome_completo,
+  a.matricula,
+  COALESCE(SUM(c.quantidade_aulas), 0) AS total_aulas,
+  COALESCE(SUM(
+    COALESCE(ca.faltas, CASE WHEN ca.presente = 0 THEN 1 ELSE 0 END, 0)
+  ), 0) AS faltas
+FROM alunos a
+LEFT JOIN chamadas c
+  ON c.turma_id = a.turma_id
+ AND c.disciplina_id = ?
+ AND c.professor_id = ?
+LEFT JOIN chamada_alunos ca
+  ON ca.chamada_id = c.id
+ AND ca.aluno_id = a.id
+WHERE a.turma_id = ?
+GROUP BY a.id, a.nome_completo, a.matricula
+ORDER BY a.nome_completo`,
+      [disciplinaId, req.usuario.id, turmaId]
     );
 
     const resultado = linhas.map((linha) => {
       const totalAulas = Number(linha.total_aulas);
-      const presencas = Number(linha.presencas);
       const faltas = Number(linha.faltas);
+      const presencas = Math.max(0, totalAulas - faltas);
       const percentual =
         totalAulas === 0
           ? null
@@ -585,6 +651,177 @@ async function listarFrequenciaTurma(req, res) {
     console.error(erro);
     return res.status(500).json({
       erro: "Erro ao calcular a frequência da turma.",
+    });
+  }
+}
+
+// GET /api/professores/desempenho?turma_id=...&disciplina_id=...
+async function listarDesempenhoTurma(req, res) {
+  const turmaId = Number(req.query.turma_id);
+  const disciplinaId = Number(req.query.disciplina_id);
+
+  if (
+    !Number.isInteger(turmaId) || turmaId <= 0 ||
+    !Number.isInteger(disciplinaId) || disciplinaId <= 0
+  ) {
+    return res.status(400).json({
+      erro: "Informe uma turma e uma disciplina válidas.",
+    });
+  }
+
+  try {
+    const [vinculos] = await pool.query(
+      `SELECT id
+       FROM vinculos
+       WHERE professor_id = ? AND turma_id = ? AND disciplina_id = ?`,
+      [req.usuario.id, turmaId, disciplinaId]
+    );
+
+    if (vinculos.length === 0) {
+      return res.status(403).json({
+        erro: "Você não tem vínculo com esta turma e disciplina.",
+      });
+    }
+
+    const [linhas] = await pool.query(
+      `SELECT
+         a.id AS aluno_id,
+         a.nome_completo,
+         a.matricula,
+         COALESCE(freq.total_aulas, 0) AS total_aulas,
+         COALESCE(freq.faltas, 0) AS faltas,
+         COALESCE(notas.soma_notas, 0) AS soma_notas,
+         COALESCE(notas.soma_maximos, 0) AS soma_maximos,
+         COALESCE(notas.notas_lancadas, 0) AS notas_lancadas,
+         COALESCE(notas.total_avaliacoes, 0) AS total_avaliacoes
+       FROM alunos a
+
+       LEFT JOIN (
+         SELECT
+           aluno.id AS aluno_id,
+           COALESCE(SUM(c.quantidade_aulas), 0) AS total_aulas,
+           COALESCE(SUM(
+             COALESCE(ca.faltas, CASE WHEN ca.presente = 0 THEN 1 ELSE 0 END, 0)
+           ), 0) AS faltas
+         FROM alunos aluno
+         LEFT JOIN chamadas c
+           ON c.turma_id = aluno.turma_id
+          AND c.disciplina_id = ?
+          AND c.professor_id = ?
+         LEFT JOIN chamada_alunos ca
+           ON ca.chamada_id = c.id
+          AND ca.aluno_id = aluno.id
+         WHERE aluno.turma_id = ?
+         GROUP BY aluno.id
+       ) freq ON freq.aluno_id = a.id
+
+       LEFT JOIN (
+         SELECT
+           aluno.id AS aluno_id,
+           COALESCE(SUM(n.nota), 0) AS soma_notas,
+           COALESCE(SUM(
+             CASE WHEN n.nota IS NOT NULL THEN av.valor_maximo ELSE 0 END
+           ), 0) AS soma_maximos,
+           COUNT(n.nota) AS notas_lancadas,
+           COUNT(DISTINCT av.id) AS total_avaliacoes
+         FROM alunos aluno
+         LEFT JOIN avaliacoes av
+           ON av.turma_id = aluno.turma_id
+          AND av.disciplina_id = ?
+          AND av.professor_id = ?
+         LEFT JOIN notas n
+           ON n.avaliacao_id = av.id
+          AND n.aluno_id = aluno.id
+         WHERE aluno.turma_id = ?
+         GROUP BY aluno.id
+       ) notas ON notas.aluno_id = a.id
+
+       WHERE a.turma_id = ?
+       ORDER BY a.nome_completo`,
+      [
+        disciplinaId, req.usuario.id, turmaId,
+        disciplinaId, req.usuario.id, turmaId,
+        turmaId,
+      ]
+    );
+
+    const alunos = linhas.map((linha) => {
+      const totalAulas = Number(linha.total_aulas);
+      const faltas = Number(linha.faltas);
+      const presencas = Math.max(0, totalAulas - faltas);
+      const percentual =
+        totalAulas === 0
+          ? null
+          : Number(((presencas / totalAulas) * 100).toFixed(2));
+
+      const somaNotas = Number(linha.soma_notas);
+      const somaMaximos = Number(linha.soma_maximos);
+      const media =
+        somaMaximos === 0
+          ? null
+          : Number(((somaNotas / somaMaximos) * 10).toFixed(2));
+
+      let situacaoFrequencia = "SEM_REGISTROS";
+      if (percentual !== null) {
+        situacaoFrequencia =
+          percentual >= 75 ? "DENTRO_DO_MINIMO" : "ABAIXO_DO_MINIMO";
+      }
+      const notasLancadas = Number(linha.notas_lancadas);
+      const totalAvaliacoes = Number(linha.total_avaliacoes);
+
+      return {
+        aluno_id: Number(linha.aluno_id),
+        nome_completo: linha.nome_completo,
+        matricula: linha.matricula,
+        total_aulas: totalAulas,
+        presencas,
+        faltas,
+        percentual,
+        situacao_frequencia: situacaoFrequencia,
+        media,
+        notas_lancadas: notasLancadas,
+        total_avaliacoes: totalAvaliacoes,
+        atencao_final:
+          totalAvaliacoes > 0 &&
+          notasLancadas === totalAvaliacoes &&
+          media !== null &&
+          media < 6,
+      };
+    });
+
+    const alunosComMedia = alunos.filter((aluno) => aluno.media !== null);
+    const somaNotasTurma = linhas.reduce(
+      (total, linha) => total + Number(linha.soma_notas),
+      0
+    );
+    const somaMaximosTurma = linhas.reduce(
+      (total, linha) => total + Number(linha.soma_maximos),
+      0
+    );
+
+    return res.json({
+      turma_id: turmaId,
+      disciplina_id: disciplinaId,
+      resumo: {
+        total_alunos: alunos.length,
+        alunos_abaixo_frequencia: alunos.filter(
+          (aluno) => aluno.percentual !== null && aluno.percentual < 75
+        ).length,
+        alunos_abaixo_media: alunos.filter(
+          (aluno) => aluno.media !== null && aluno.media < 6
+        ).length,
+        media_turma:
+          somaMaximosTurma === 0
+            ? null
+            : Number(((somaNotasTurma / somaMaximosTurma) * 10).toFixed(2)),
+        alunos_com_notas: alunosComMedia.length,
+      },
+      alunos,
+    });
+  } catch (erro) {
+    console.error(erro);
+    return res.status(500).json({
+      erro: "Erro ao calcular o desempenho da turma.",
     });
   }
 }
@@ -979,7 +1216,7 @@ async function salvarNotasAvaliacao(req, res) {
 // PUT /api/professores/avaliacoes/:id
 async function editarAvaliacao(req, res) {
   const avaliacaoId = Number(req.params.id);
-  const {bimestre,titulo,tipo,data_avaliacao,valor_maximo,} = req.body || {};
+  const { bimestre, titulo, tipo, data_avaliacao, valor_maximo, } = req.body || {};
 
   const numeroBimestre = Number(bimestre);
   const tituloFinal = typeof titulo === "string" ? titulo.trim() : "";
@@ -1161,4 +1398,138 @@ async function obterPerfilProfessor(req, res) {
   }
 }
 
-module.exports = { cadastrar, cadastrarPeloCoordenador, listar, remover, listarVinculosProfessor, registrarChamada, listarChamadas, obterChamada, editarChamada, listarFrequenciaTurma, criarAvaliacao, listarAvaliacoes, obterAvaliacao, salvarNotasAvaliacao, excluirAvaliacao, obterPerfilProfessor, editarAvaliacao };
+// GET /api/professores/alunos/:id/desempenho?turma_id=...&disciplina_id=...
+async function obterDesempenhoAluno(req, res) {
+  const alunoId = Number(req.params.id);
+  const turmaId = Number(req.query.turma_id);
+  const disciplinaId = Number(req.query.disciplina_id);
+
+  if (
+    !Number.isInteger(alunoId) || alunoId <= 0 ||
+    !Number.isInteger(turmaId) || turmaId <= 0 ||
+    !Number.isInteger(disciplinaId) || disciplinaId <= 0
+  ) {
+    return res.status(400).json({ erro: "Aluno, turma ou disciplina inválidos." });
+  }
+
+  try {
+    const [vinculos] = await pool.query(
+      `SELECT id FROM vinculos
+       WHERE professor_id = ? AND turma_id = ? AND disciplina_id = ?`,
+      [req.usuario.id, turmaId, disciplinaId]
+    );
+
+    if (vinculos.length === 0) {
+      return res.status(403).json({
+        erro: "Você não tem vínculo com esta turma e disciplina.",
+      });
+    }
+
+    const [alunos] = await pool.query(
+      `SELECT id, nome_completo, matricula
+       FROM alunos
+       WHERE id = ? AND turma_id = ?`,
+      [alunoId, turmaId]
+    );
+
+    if (alunos.length === 0) {
+      return res.status(404).json({ erro: "Aluno não encontrado nesta turma." });
+    }
+
+    const [avaliacoes] = await pool.query(
+      `SELECT
+         av.id AS avaliacao_id,
+         av.bimestre,
+         av.titulo,
+         av.tipo,
+         DATE_FORMAT(av.data_avaliacao, '%Y-%m-%d') AS data_avaliacao,
+         av.valor_maximo,
+         n.nota
+       FROM avaliacoes av
+       LEFT JOIN notas n
+         ON n.avaliacao_id = av.id AND n.aluno_id = ?
+       WHERE av.professor_id = ? AND av.turma_id = ? AND av.disciplina_id = ?
+       ORDER BY av.bimestre, av.data_avaliacao, av.id`,
+      [alunoId, req.usuario.id, turmaId, disciplinaId]
+    );
+
+    const mapaBimestres = new Map();
+
+    for (const linha of avaliacoes) {
+      const numero = Number(linha.bimestre) || 0;
+
+      if (!mapaBimestres.has(numero)) {
+        mapaBimestres.set(numero, []);
+      }
+
+      mapaBimestres.get(numero).push({
+        avaliacao_id: linha.avaliacao_id,
+        titulo: linha.titulo,
+        tipo: linha.tipo,
+        data_avaliacao: linha.data_avaliacao,
+        valor_maximo: Number(linha.valor_maximo),
+        nota: linha.nota === null ? null : Number(linha.nota),
+      });
+    }
+
+    const bimestres = [...mapaBimestres.entries()]
+      .sort((a, b) => a[0] - b[0])
+      .map(([numero, lista]) => {
+        const comNota = lista.filter((item) => item.nota !== null);
+        const somaNotas = comNota.reduce((t, item) => t + item.nota, 0);
+        const somaMaximos = comNota.reduce((t, item) => t + item.valor_maximo, 0);
+
+        return {
+          bimestre: numero,
+          media:
+            somaMaximos > 0
+              ? Number(((somaNotas / somaMaximos) * 10).toFixed(2))
+              : null,
+          avaliacoes: lista,
+        };
+      });
+
+    const [freq] = await pool.query(
+      `SELECT
+         COALESCE(SUM(c.quantidade_aulas), 0) AS total_aulas,
+         COALESCE(SUM(
+           COALESCE(ca.faltas, CASE WHEN ca.presente = 0 THEN 1 ELSE 0 END, 0)
+         ), 0) AS faltas
+       FROM chamadas c
+       LEFT JOIN chamada_alunos ca
+         ON ca.chamada_id = c.id AND ca.aluno_id = ?
+       WHERE c.professor_id = ? AND c.turma_id = ? AND c.disciplina_id = ?`,
+      [alunoId, req.usuario.id, turmaId, disciplinaId]
+    );
+
+    const totalAulas = Number(freq[0].total_aulas);
+    const faltas = Number(freq[0].faltas);
+    const presencas = Math.max(0, totalAulas - faltas);
+    const percentual =
+      totalAulas === 0
+        ? null
+        : Number(((presencas / totalAulas) * 100).toFixed(2));
+
+    let situacao = "SEM_REGISTROS";
+    if (percentual !== null) {
+      situacao = percentual >= 75 ? "DENTRO_DO_MINIMO" : "ABAIXO_DO_MINIMO";
+    }
+
+    return res.json({
+      aluno: alunos[0],
+      bimestres,
+      frequencia: {
+        total_aulas: totalAulas,
+        presencas,
+        faltas,
+        percentual,
+        situacao,
+      },
+    });
+  } catch (erro) {
+    console.error(erro);
+    return res.status(500).json({ erro: "Erro ao calcular o desempenho do aluno." });
+  }
+}
+
+module.exports = { cadastrar, cadastrarPeloCoordenador, listar, remover, listarVinculosProfessor, registrarChamada, listarChamadas, obterChamada, editarChamada, listarFrequenciaTurma, criarAvaliacao, listarAvaliacoes, obterAvaliacao, salvarNotasAvaliacao, excluirAvaliacao, obterPerfilProfessor, editarAvaliacao, atualizarAulasPorDia, obterDesempenhoAluno, listarDesempenhoTurma, };

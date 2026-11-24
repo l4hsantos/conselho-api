@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const {cadastrar,cadastrarPeloCoordenador,listar,remover, listarVinculosProfessor, registrarChamada,listarChamadas, obterChamada, editarChamada, listarFrequenciaTurma, criarAvaliacao, listarAvaliacoes,obterAvaliacao, salvarNotasAvaliacao, excluirAvaliacao, obterPerfilProfessor, editarAvaliacao } = require('../controllers/professorController');
+const {cadastrar,cadastrarPeloCoordenador,listar,remover, listarVinculosProfessor, registrarChamada,listarChamadas, obterChamada, editarChamada, listarFrequenciaTurma, criarAvaliacao, listarAvaliacoes,obterAvaliacao, salvarNotasAvaliacao, excluirAvaliacao, obterPerfilProfessor, editarAvaliacao, atualizarAulasPorDia, obterDesempenhoAluno, listarDesempenhoTurma } = require('../controllers/professorController');
 const { autenticar, somenteCoordenador, somenteProfessor } = require('../middlewares/auth');
 
 // POST /api/professores/cadastro  → aberto (auto-registro com chave)
@@ -30,7 +30,11 @@ router.get('/chamadas/:id', autenticar, somenteProfessor, obterChamada);
 // PUT /api/professores/chamadas/:id — editar chamada do professor autenticado
 router.put('/chamadas/:id',autenticar,somenteProfessor, editarChamada);
 
+router.put("/vinculos/aulas-por-dia",autenticar,somenteProfessor,atualizarAulasPorDia);
+
 router.get("/frequencia",autenticar,somenteProfessor,listarFrequenciaTurma);
+
+router.get("/desempenho",autenticar,somenteProfessor,listarDesempenhoTurma);
 
 // POST /api/professores/avaliacoes — criar avaliação
 router.post('/avaliacoes', autenticar, somenteProfessor, criarAvaliacao);
@@ -51,5 +55,7 @@ router.delete('/avaliacoes/:id', autenticar, somenteProfessor, excluirAvaliacao)
 router.get('/perfil', autenticar, somenteProfessor, obterPerfilProfessor);
 
 router.put('/avaliacoes/:id', autenticar, somenteProfessor, editarAvaliacao);
+
+router.get('/alunos/:id/desempenho', autenticar, somenteProfessor, obterDesempenhoAluno);
 
 module.exports = router;
